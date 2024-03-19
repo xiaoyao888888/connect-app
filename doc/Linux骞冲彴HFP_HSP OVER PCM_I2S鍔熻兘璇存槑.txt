@@ -1,0 +1,84 @@
+HSP/HFP说明：
+SCO OVER HCI(UART/USB)：
+Linux平台包括Debian/Ubuntu不支持SCO OVER PCM，默认只支持SCO OVER HCI
+
+SCO OVER PCM明：
+Realtek芯片：需找Realtek原厂支持；
+AP/英飞凌CYPRESS: 需使用BSA协议栈；
+
+一般先调蓝牙，如何确认蓝牙已调好， 微信/QQ电话时用示波器确认有波形， 断开PCM 数据线，用摄子短接IN/OUT
+耳机端能听到清晰回声，则证明蓝牙已调通。
+为了减少沟通，客户拿到补丁后先做实验，提redmine时提供实验截图。
+
+主控PCM 主从配制 用于蓝牙与主控PCM连接
+蓝牙配制为主，pcm_sync pcm_clk 由蓝牙提供。
+主控配制为主， 则cm_sync pcm_clk 由主控提供。
+
+RK CODEC 相关配置说明如下：
+
+DTS：配置
+主控PCM 主从配制 用于蓝牙与主控PCM连接，如下：
+RK做主，codec做从：主控配制为主，pcm_sync/pcm_clk 信号由由主控提供。
+bt-sound {
+		compatible = "simple-audio-card";
+		simple-audio-card,format = "dsp_b";
+		simple-audio-card,bitclock-inversion = <1>;
+		simple-audio-card,mclk-fs = <256>;
+		simple-audio-card,name = "rockchip,bt";
+		simple-audio-card,cpu {
+			sound-dai = <&i2s2_2ch>;  //根据原理图找到对应的I2S/PCM接口，引用它并使能它；
+		};
+		simple-audio-card,codec {
+			sound-dai = <&bt_sco>;
+		};
+	};
+
+	bt_sco: bt-sco {
+		compatible = "delta,dfbmcs320";
+		#sound-dai-cells = <0>;
+		status = "okay";
+	};
+
+
+
+RK做从，codec做主：蓝牙芯片配制为主，pcm_sync/pcm_clk 信号由由蓝牙提供。
+	bt-sound {
+		compatible = "simple-audio-card";
+		simple-audio-card,format = "dsp_b";
+		simple-audio-card,bitclock-inversion = <1>;
+		simple-audio-card,mclk-fs = <256>;
+		simple-audio-card,name = "rockchip,bt";
+		simple-audio-card,bitclock-master = <&sound2_master>;
+		simple-audio-card,frame-master = <&sound2_master>;
+		simple-audio-card,cpu {
+			sound-dai = <&i2s2_2ch>;  //根据原理图找到对应的I2S/PCM接口，引用它并使能它；
+		};
+		sound2_master:simple-audio-card,codec {
+			sound-dai = <&bt_sco>;
+		};
+	};
+
+	bt_sco: bt-sco {
+		compatible = "delta,dfbmcs320";
+		#sound-dai-cells = <0>;
+		status = "okay";
+	};
+
+注意要使能对应的i2s
+&i2s2_2ch {
+	#sound-dai-cells = <0>;
+	status = "okay";
+};
+
+KERNEL配置
+--- a/arch/arm64/configs/rockchip_linux_defconfig
++++ b/arch/arm64/configs/rockchip_linux_defconfig
+@@ -398,6 +398,7 @@ CONFIG_SND_SOC_RT5616=y
+ CONFIG_SND_SOC_RT5640=y
+ CONFIG_SND_SOC_SPDIF=y
+ CONFIG_SND_SIMPLE_CARD=y
++CONFIG_SND_SOC_BT_SCO=y
+ CONFIG_HID_BATTERY_STRENGTH=y
+ CONFIG_HIDRAW=y
+ CONFIG_UHID=y
+

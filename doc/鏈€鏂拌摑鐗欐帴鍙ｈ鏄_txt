@@ -1,0 +1,111 @@
+说明：蓝牙接口基于Bluez协议栈，支持基本的A2DP SINK SOURCE HFP_AG HFP_HF BLE SPP HID/HOG 等profile
+
+使用要注意如下几点：
+一. 更新相关软件到最新，以FTP上的版本为准
+/11-Linux平台/11-Linux平台/WIFIBT编程接口/bluez/bluez-alsa 完全替换 buildroot/package/bluez-alsa/
+/11-Linux平台/11-Linux平台/WIFIBT编程接口/bluez/bluez5_utils 完全替换 buildroot/package/bluez5_utils/
+
+二. buildroot系统依赖如下配置，请确保打开它们：
+BR2_PACKAGE_BLUEZ_ALSA=y
+BR2_PACKAGE_BLUEZ_ALSA_RFCOMM=y
+
+BR2_PACKAGE_BLUEZ5_UTILS=y
+BR2_PACKAGE_BLUEZ5_UTILS_OBEX=y
+BR2_PACKAGE_BLUEZ5_UTILS_CLIENT=y
+BR2_PACKAGE_BLUEZ5_UTILS_MONITOR=y
+BR2_PACKAGE_BLUEZ5_UTILS_TOOLS=y
+BR2_PACKAGE_BLUEZ5_UTILS_DEPRECATED=y
+BR2_PACKAGE_BLUEZ5_UTILS_PLUGINS_AUDIO=y
+BR2_PACKAGE_BLUEZ5_UTILS_PLUGINS_HID=y
+BR2_PACKAGE_BLUEZ5_UTILS_PLUGINS_HOG=y
+
+三. 重新编译
+首先删除之前的版本：
+rm buildroot/output/rockchip_rk3568/build/bluez5_utils*
+rm buildroot/output/rockchip_rk3568/build/bluez-alsa*
+或者
+make bluez5_utils-dirclean
+make bluez-alsa-dirclean
+然后重新make或用./build.sh脚本程序编译（参考SDK编译说明）
+
+更新完后，开机执行查看版本号, 确保更新成功
+bluetoothctl -v
+bluetoothctl: 5.62
+
+bluealsa --version
+v4.0.0
+
+四. 蓝牙接口功能参考：
+/11-Linux平台/WIFIBT编程接口/Rockchip_Developer_Guide_DeviceIo_Bluetooth_CN.pdf
+下面针对改动的地方及重要事项进行说明：
+1. 扫描改动：
+rk_bt_start_discovery();  //启动扫描函数，设置的时间参数不再有效，一直会处于扫描状态；
+rk_bt_cancel_discovery(); //只有主动关闭扫描功能，才能停止扫描；
+
+2. 不再单独有HFP的相关接口，直接合并到a2dp sink 和 source接口：
+比如；
+bt_test_sink_open： 同时支持 A2DP SINK/HFP-HF 模式，支持微信/电话通话
+bt_test_source_open： 同时支持 A2DP SOURCE/HFP-AG模式，支持微信/电话通话
+
+对于通话功能说明：
+由于蓝牙通话的音频格式是：
+SCO (CVSD): S16_LE 1 channel 8000 Hz
+而RK平台的默认声卡都是双channel的，因此默认是不能用裸声卡去播放，所以需要重采样才能播放，
+所以目前采用的策略是：
+* 对于电话端传来的声音，通过bluealsa-aplay工具录起来，然后通过重采样方式去播放录到的声音recording.wav
+bluealsa-aplay --profile-sco --pcm=file:FILE=/data/recording.wav,FORMAT=wav
+* 把本地声音播放到手机端，正常情况下通过声卡录音到/data/123.wav，然后通过aplay播放出去
+aplay -D bluealsa:DEV=D8:4C:90:CD:22:42,PROFILE=sco /data/123.wav
+注：对于D8:4C:90:CD:22:42上面的地址表示手机端的地址，可以通过如下命令查看：
+bluealsa-aplay -l
+**** List of PLAYBACK Bluetooth Devices ****
+hci0: D8:4C:90:CD:22:42 [hkh], phone
+  SCO (CVSD): S16_LE 1 channel 8000 Hz    //蓝牙通话的音频格式
+**** List of CAPTURE Bluetooth Devices ****
+hci0: D8:4C:90:CD:22:42 [hkh], phone
+  A2DP (SBC): S16_LE 2 channels 44100 Hz  //蓝牙音乐的音频格式
+  SCO (CVSD): S16_LE 1 channel 8000 Hz	  //蓝牙通话的音频格式
+
+bluealsa:DEV=F0:13:C3:50:FF:26,PROFILE=a2dp
+arecord -D bluealsa:DEV=F0:13:C3:50:FF:26,PROFILE=a2dp -f s16_le -c 2 -r 48000 capture.wav
+arecord -D hw:2,0 -r 48000 -c 2 -f S16_LE | aplay -D bluealsa:DEV=F0:13:C3:50:FF:26,PROFILE=a2dp -
+arecord -D hw:2,0 -r 48000 -c 2 -f S16_LE | aplay -D bluealsa:DEV=F0:13:C3:50:FF:26,PROFILE=sco -
+arecord -D bluealsa:DEV=F0:13:C3:50:FF:26,PROFILE=sco -f s16_le -c 2 -r 48000 cap.wav
+arecord -D bluealsa:DEV=F0:13:C3:50:FF:26,PROFILE=a2dp -f s16_le -c 2 -r 48000 capture.wav
+aplay -D bluealsa:DEV=F0:13:C3:50:FF:26,PROFILE=sco /data/Windows\ Proximity\ Notification.wav
+
+3. 手机做client角色，设备做server角色，新增手机主动去读的接口，相比之前改动如下：
+include/RkBtBase.h
+@@ -99,7 +99,7 @@ typedef struct {
+        /* recevice data */
+        void (*cb_ble_recv_fun)(const char *uuid, char *data, int len);
+        /* full data */
+-       void (*cb_ble_request_data)(const char *uuid);
++       void (*cb_ble_request_data)(const char *uuid, char *data, int *len);
+ } RkBleContent;
+
+test/bt_test.c
+-static void bt_test_ble_request_data_callback(const char *uuid)
++static void bt_test_ble_request_data_callback(const char *uuid, char *data, int *len)
+ {
+        printf("=== %s uuid: %s===\n", __func__, uuid);
+-       //rk_ble_write(uuid, "Hello Rockchip", strlen("Hello Rockchip"));
+-       send_data(uuid);
+
++       *len = strlen("hello rockchip");  							//长度
++       memcpy(data, "hello rockchip", strlen("hello rockchip"));	//数据
++
++       printf("=== %s uuid: %s data: %s[%d]===\n", __func__, uuid, data, *len);
++
++       return;
+ }
+
+//删除未用的API
+-int rk_ble_register_recv_callback(RK_BLE_RECV_CALLBACK cb)
+-void rk_ble_register_request_data_callback(RK_BLE_REQUEST_DATA cb)
+
+五. 回调：
+切记：蓝牙api提供的所有回调函数，它仅是通知相关功能，务必不要在里面做任何耗时或阻塞的操作，比如加锁或者延时或者启动线程等待操作！！！
+
+六. 测试：
+蓝牙测试：rkwifibt_test bluetooth   #蓝牙相关API测试，也可参考：/11-Linux平台/WIFIBT编程接口/Rockchip_Developer_Guide_DeviceIo_Bluetooth_CN.pdf

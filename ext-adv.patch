@@ -1,0 +1,25 @@
+diff --git a/rkwifibt-app/bluez/a2dp_source/advertising.c b/rkwifibt-app/bluez/a2dp_source/advertising.c
+index 9f0af74..1ab9a7a 100644
+--- a/rkwifibt-app/bluez/a2dp_source/advertising.c
++++ b/rkwifibt-app/bluez/a2dp_source/advertising.c
+@@ -77,6 +77,7 @@ static struct ad {
+ 	bool tx_power;
+ 	bool name;
+ 	bool appearance;
++	char *secondary;
+ } ad = {
+ 	.local_appearance = UINT16_MAX,
+ };
+@@ -956,6 +957,12 @@ void iBle_init_adv(DBusConnection *dbus_conn, RkBtContent *bt_content)
+ 	ad.manufacturer.data.len = 16;
+ 	g_dbus_emit_property_changed_full(dbus_conn, AD_PATH, AD_IFACE, "ManufacturerData", G_DBUS_PROPERTY_CHANGED_FLAG_FLUSH);
+ 
++	if (ad.secondary)
++		free(ad.secondary);
++	ad.secondary = strdup("Coded"); //"[1M/2M/Coded]"
++	g_dbus_emit_property_changed(dbus_conn, AD_PATH, AD_IFACE,
++							"SecondaryChannel");
++
+ 	//custom data
+ 	//todo
+ }

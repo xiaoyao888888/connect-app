@@ -1,0 +1,70 @@
+diff --git a/bluez/spp_server/spp_server.c b/bluez/spp_server/spp_server.c
+index bce0859..2bbbf27 100644
+--- a/bluez/spp_server/spp_server.c
++++ b/bluez/spp_server/spp_server.c
+@@ -27,6 +27,9 @@
+ #include <bluetooth/hci_lib.h>
+ #include <bluetooth/rfcomm.h>
+ 
++#include <bluetooth/sdp.h>
++#include <bluetooth/sdp_lib.h>
++
+ #include "utility.h"
+ #include "slog.h"
+ #include "spp_server.h"
+@@ -48,6 +51,55 @@ static spp_handler_t g_spp_handler = {
+ 	-1, -1, 0, 1, false, RK_BT_SPP_STATE_IDLE, NULL, NULL,
+ };
+ 
++static bdaddr_t bdaddr;
++static uint8_t rfcomm_get_channel(const char *svr, uint16_t uuid)
++{
++	sdp_session_t *sdp;
++	sdp_list_t *srch, *attrs, *rsp, *protos;
++	uuid_t svclass;
++	uint16_t attr;
++	bdaddr_t dst;
++	uint8_t channel = 0;
++	int err;
++
++	str2ba(svr, &dst);
++
++	sdp = sdp_connect(&bdaddr, &dst, SDP_RETRY_IF_BUSY);
++	if (!sdp)
++		return 0;
++
++	sdp_uuid16_create(&svclass, uuid);
++	srch = sdp_list_append(NULL, &svclass);
++
++	attr = SDP_ATTR_PROTO_DESC_LIST;
++	attrs = sdp_list_append(NULL, &attr);
++
++	err = sdp_service_search_attr_req(sdp, srch,
++					SDP_ATTR_REQ_INDIVIDUAL, attrs, &rsp);
++	if (err)
++		goto done;
++
++	for (; rsp; rsp = rsp->next) {
++		sdp_record_t *rec = (sdp_record_t *) rsp->data;
++
++		if (!sdp_get_access_protos(rec, &protos)) {
++			channel = sdp_get_proto_port(protos, RFCOMM_UUID);
++			if (channel > 0)
++				break;
++		}
++	}
++
++	sdp_list_free(protos, NULL);
++
++done:
++	sdp_list_free(srch, NULL);
++	sdp_list_free(attrs, NULL);
++	sdp_close(sdp);
++
++	return channel;
++}
++
++
+ static void spp_state_send(RK_BT_SPP_STATE state)
+ {
+ 	if (g_spp_handler.state_cb)

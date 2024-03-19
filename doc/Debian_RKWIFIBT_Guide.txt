@@ -1,0 +1,202 @@
+RK平台Debian系统下适配WiFi/BT指导，分为下面三个部分
+1. 正基模块适配示例
+2. Realtek模块适配示例
+3. 固件打包方式及运行说明
+
++=================+
+| 正基模块适配示例   |
++=================+
+### 下面以AP6275P为例，三个文件找正基模组厂获取
+# 蓝牙初始化文件: brcm_patchram_plus1.c，然后用系统使用的编译器编译成可执行文件brcm_patchram_plus1并放到系统里面去
+external/rkwifibt/brcm_tools/brcm_patchram_plus1.c # 如果有RKSDK，可以从这个目录获取
+
+# BT firmware文件：根据实际使用系统的需求存放，没有特殊要求，下面的brcm_patchram_plus1蓝牙初始化程序会要求指定firmware的路径；
+BCM4362A2.hcd
+
+# Wi-Fi firmware文件：根据实际使用系统的需求存放
+clm_bcm43752a2_pcie_ag.blob
+fw_bcm43752a2_pcie_ag.bin
+fw_bcm43752a2_pcie_ag_apsta.bin
+nvram_AP6275P.txt
+
+### 配置
+# 检查内核Wi-Fi配置，打开如下几个配置：
+CONFIG_WL_ROCKCHIP=y
+CONFIG_WIFI_BUILD_MODULE=y
+CONFIG_BCMDHD=y
+CONFIG_AP6XXX=m
+CONFIG_BCMDHD_PCIE=y #PCIE接口，与SDIO互斥，不是PCIE可不配
+CONFIG_BCMDHD_SDIO=y #SDIO接口，与PCIE互斥
+
+### Wi-Fi接口初始化
+# make 编译完会生成ko，这个文件根据你们实际需求存放到对应位置，打开Wi-Fi加载这个ko即可；
+drivers/net/wireless/rockchip_wlan/rkwifi/bcmdhd/bcmdhd.ko
+
+# 打开Wi-Fi：需先加载ko，并在insmod时参数指定firmware/nvram的路径，下面xx_path改成实际使用的：
+insmod /ko_path/bcmdhd.ko firmware_path=/fw_path/ nvram_path=/nvram_path/
+ifconfig -a    #正常的话可以看到wlan0，如果没有参考第2章及第7章节进行排查
+
+### 蓝牙接口初始化
+# 打开蓝牙，先复位BT电源：
+echo 0 > /sys/class/rfkill/rfkill0/state   #关闭BT电源，等同于rfkill block操作
+echo 0 > /proc/bluetooth/sleep/btwrite 
+sleep 0.2
+echo 1 > /sys/class/rfkill/rfkill0/state   #打开BT电源，等同于rfkill unblock操作
+echo 1 > /proc/bluetooth/sleep/btwrite 
+sleep 0.2
+# 初始化蓝牙命令，--patchram指定蓝牙firmware文件的路径(根据实际情况修改)，/dev/ttyS8是对应硬件的串口号(根据实际情况修改)
+brcm_patchram_plus1 --bd_addr_rand --enable_hci --no2bytes --use_baudrate_for_download  --tosleep  200000 --baudrate 1500000 --patchram  /system/etc/firmware/BCM4362A2.hcd /dev/ttyS8 &
+# 如果系统有安装bluez协议栈，则使用hciconfig指令
+hciconfig -a #可以看到hci0节点，如果没有参考第2章及第7章节进行排查
+
+# 关闭蓝牙：
+echo 0 > /sys/class/rfkill/rfkill0/state   #关闭BT电源，等同于rfkill block操作
+echo 0 > /proc/bluetooth/sleep/btwrite 
+killall brcm_patchram_plus1                #务必要杀掉brcm_patchram_plus1进程，因为打开时会再次执行，否则会冲突；
+
+#以上打开关闭操作根据实际情况移植到你们系统中去；
+
+#注意：如果应用层开关蓝牙有调用到rfkill block关闭蓝牙电源，则再次unblock打开蓝牙电源时，必须再次执行brcm_patchram_plus1蓝牙初始化命令，否则蓝牙无法使用；如果上层仅是hciconfig hci0 down/up，则无需调用重复初始化；
+
++=====================+
+| Realtek模块适配示例   |
++=====================+
+### 下面以RTL8822CS为例，首先找模组厂获取对应模块的驱动包
+# Wi-Fi的：RTL8822CS_WiFi_linux_v5.12.1.5-1-g0e1519e_COEX20210504-2323.20210527
+# BT的：20201202_LINUX_BT_DRIVER_RTL8822C_COEX_v1c1c
+
+### Wi-Fi适配
+# 参考8.1移植章节适配Wi-Fi驱动到RK平台，并参考第2章节进行基础的dts及内核配置
+# make 编译完会生成ko，这个文件根据你们实际需求存放到对应位置，打开Wi-Fi加载这个ko即可；
+drivers/net/wireless/rockchip_wlan/rkwifi/rtl8822cs/8822cs.ko
+
+insmod /ko_path/88xxxx.ko # realtek无需firmware/nvram文件，insmod执行时机根据系统要求进行调整；
+ifconfig -a    #正常的话可以看到wlan0，如果没有参考第2章及第7章节进行排查
+
+### 蓝牙适配
+# fw/config 文件说明：
+# 只有蓝牙才需要fw/config(文件从驱动包里面找)文件，存放位置跟接口有关
+# RTL UART接口，RTL8822CS对应的文件放到如下位置
+/lib/firmware/rtlbt/rtl8822cs_fw
+/lib/firmware/rtlbt/rtl8822cs_config
+# Copy the right FW file and config file to the correct path. (拷贝firmware/config文件)
+$ sudo mkdir -p /lib/firmware/rtlbt/
+$ sudo cp rtkbt-firmware/lib/firmware/rtlbt/rtl8xxxx_fw /lib/firmware/rtlbt/
+$ sudo cp rtkbt-firmware/lib/firmware/rtlbt/rtl8xxxx_config /lib/firmware/rtlbt/
+
+# RTL USB接口  RTL8822CU对应的文件（把对应的fw/config文件拷贝到系统对应的位置）
+/lib/firmware/rtl8822cu_fw
+/lib/firmware/rtl8822cu_config
+# Copy the right FW file and config file to the correct path.
+$ sudo cp rtkbt-firmware/lib/firmware/rtl8xxxxx_fw /lib/firmware/
+$ sudo cp rtkbt-firmware/lib/firmware/rtl8xxxxx_config /lib/firmware/
+
+# rtk_hciattach/hci_uart/usb.ko文件说明
+# 参考9.2.2章节工具编译说明
+
+# hci_uart/usb.ko文件说明，realtek不使用内核自带的接口驱动，内核必须先去掉如下两个配置：
+CONFIG_BT_HCIBTUSB
+CONFIG_BT_HCIUART
+
+### 初始化说明
+# UART 接口：
+killall rtk_hciattach #首先必须确保先关掉此进程(如果之前有打开)
+echo 0 > /sys/class/rfkill/rfkill0/state #下电
+echo 0 > /proc/bluetooth/sleep/btwrite 
+sleep 0.5
+echo 1 > /sys/class/rfkill/rfkill0/state #上电
+echo 1 > /proc/bluetooth/sleep/btwrite 
+sleep 0.5
+insmod /usr/lib/modules/hci_uart.ko                # realtek模组需要加载uart驱动
+rtk_hciattach -n -s 115200 /dev/ttyS4 rtk_h5 &     # ttySX指的是蓝牙使用哪个uart口
+# 如果系统有安装bluez协议栈，则使用hciconfig指令
+hciconfig -a #正常的话可以看到hci0节点，如果没有参考第2章及第7章节进行排查
+
+# USB 接口：
+echo 0 > /sys/class/rfkill/rfkill0/state #下电
+echo 0 > /proc/bluetooth/sleep/btwrite 
+sleep 0.5
+echo 1 > /sys/class/rfkill/rfkill0/state #上电
+echo 1 > /proc/bluetooth/sleep/btwrite 
+sleep 0.5
+insmod /usr/lib/modules/rtk_btusb.ko             # realtek模组需要加载usb驱动
+# 如果系统有安装bluez协议栈，则使用hciconfig指令
+hciconfig -a #正常的话可以看到hci0节点，如果没有参考第2章及第7章节进行排查
+
+#蓝牙驱动/rtk_hciattach工具编译说明
+### Realtek UART/USB 蓝牙驱动 ko驱动编译：
+$ make -C /home/rk/rk3xxx/kernel/  \
+	CROSS_COMPILE=prebuilts/gcc/linux-x86/aarch64/gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu/bin/aarch64-none-linux-gnu- \
+	ARCH=arm64 \
+	M=/home/rk/rk3xxx/usb(uart)/bluetooth_usb(uart)_driver/
+
+	# -C 指定kernel目录
+# CROSS_COMPILE 指定交叉编译工具链路径
+# ARCH 指定系统平台
+# M 指定uart/usb driver路径
+# 注意路径必须为绝对路径
+# 编译成功后会生成
+
+# rtk_hciattach UART 初始化程序编译：
+$ make CROSS_COMPILE=/home/rk/rk3xxx/prebuilts/gcc/linux-x86/aarch64/gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu/bin/aarch64-none-linux-gnu- -C /home/rk/rk3xxx/uart/rtk_hciattach/
+# -C 指定kernel目录
+# CROSS_COMPILE 指定交叉编译工具链路径
+
++=====================+
+| 固件打包方式及运行说明  |
++=====================+
+#Debian 10/11，修改如下脚本
+debian/mk-rootfs-buster.sh
+debian/mk-rootfs-bullseye.sh
+
+	#根据实际需求新建文件夹
+	sudo mkdir -p $TARGET_ROOTFS_DIR/system/lib/modules/
+	sudo mkdir -p $TARGET_ROOTFS_DIR/system/lib/etc/
+	sudo mkdir -p $TARGET_ROOTFS_DIR/lib/firmware/
+	sudo mkdir -p $TARGET_ROOTFS_DIR/lib/firmware/rtl/
+
+	#拷贝相关二进制
+	sudo cp /实际存放的bin目录/rtk_hcixxx(or brcm_xxx)  $TARGET_ROOTFS_DIR/usr/bin/
+
+	#拷贝相关ko
+	sudo cp /实际存放的ko目录/bcmdhd.ko(rtlxxx.ko) $TARGET_ROOTFS_DIR/system/lib/modules/
+
+	#拷贝firmware
+	sudo cp /实际存放的firmware的目录/fw  $TARGET_ROOTFS_DIR/lib/firmware/
+	sudo cp /实际存放的firmware的目录/fw  $TARGET_ROOTFS_DIR/system/lib/etc/
+
+
+#根据具体的芯片平台，在下面的文件加入初始化指令或自定义命令，系统起来后会自动调用rkwifibt.sh脚本
+debian/overlay/etc/init.d/rkwifibt.sh
+
+init_rkwifibt() {
+    case $1 in
+        rk3288)
+            rk_wifi_init /dev/ttyS0
+            ;;
+        rk3399|rk3399pro)
+            rk_wifi_init /dev/ttyS0
+            ;;
+        rk3328)
+            rk_wifi_init /dev/ttyS0
+            ;;
+        rk3326|px30)
+            rk_wifi_init /dev/ttyS1
+            ;;
+        rk3128|rk3036)
+            rk_wifi_init /dev/ttyS0
+            ;;
+        rk3566)
+            rk_wifi_init /dev/ttyS1
+            ;;
+        rk3568)
+            rk_wifi_init /dev/ttyS8
+			#假如是3568平台，在这里加入初始化指令或自定义命令
+            ;;
+        rk3588|rk3588s)
+            rk_wifi_init /dev/ttyS8
+            ;;
+    esac
+}
+
+#最后重新打包Debian固件
